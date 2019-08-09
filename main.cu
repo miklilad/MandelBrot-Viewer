@@ -1,10 +1,50 @@
 #include <iostream>
+#include <chrono>
 #include "SDL2/SDL.h"
 #include "cuda.h"
 
+const int WIDTH = 640; //640
+const int HEIGHT = 480; //480
 
-const int WIDTH = 480;
-const int HEIGHT = 480;
+struct HSV
+{
+    float h;
+    float s;
+    float v;
+};
+
+struct RGB
+{
+    int r;
+    int g;
+    int b;
+};
+
+RGB Hsv2rgb(const HSV & color)
+{
+    float s = color.s / 100;
+    float v = color.v / 100;
+    float c = v * s;
+    float h = color.h / 60;
+    float x = c * (1 - abs(fmod(h, 2) - 1));
+    float m = v - c;
+    int hi = (int)floor(h) % 6;
+    HSV converted;
+    switch(hi)
+    {
+        case 0: converted = {c, x, 0}; break;
+        case 1: converted = {x, c, 0}; break;
+        case 2: converted = {0, c, x}; break;
+        case 3: converted = {0, x, c}; break;
+        case 4: converted = {x, 0, c}; break;
+        case 5: converted = {c, 0, x}; break;
+        default: return {0, 0, 0};
+    }
+    int r = (converted.h + m) * 255;
+    int g = (converted.s + m) * 255;
+    int b = (converted.v + m) * 255;
+    return {r, g, b};
+}
 
 void Draw(SDL_Renderer * ren, int * data) 
 {
@@ -15,7 +55,8 @@ void Draw(SDL_Renderer * ren, int * data)
         for (int y = 0; y < HEIGHT; y++) 
         {
             int i = y * WIDTH + x;
-            SDL_SetRenderDrawColor(ren,data[i],data[i],data[i],255);
+            RGB c = Hsv2rgb({data[i+WIDTH*HEIGHT]+data[i+WIDTH*HEIGHT*2], 100, data[i] % 100});
+            SDL_SetRenderDrawColor(ren,c.r, c.g, c.b,255);
             SDL_RenderDrawPoint(ren,x,y);
         }
     }
@@ -24,16 +65,17 @@ void Draw(SDL_Renderer * ren, int * data)
 
 
 __global__
-void Calculate( int * data, double xC, double yC, double zoom, int iterations, int width, int height, int * check)
+void Calculate( int * data, double xC, double yC, double zoom, int iterations, int width, int height)
 {
     int x = blockDim.x * blockIdx.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
     int k = y * width + x;
 
-    *check += 1; 
-
     if(x >= width || y >= height)
         return;
+
+    data[k+width*height] = blockIdx.x;
+    data[k+width*height*2] = blockIdx.y;
 
     double cR = xC + (x - width / 2) / zoom;
     double cI = yC + (y - height / 2) / zoom;
@@ -56,10 +98,11 @@ void Calculate( int * data, double xC, double yC, double zoom, int iterations, i
 
 int main() 
 {
+    int imageSize = HEIGHT * WIDTH * sizeof(int);
     int * data;
     int * d_data;
-    data = (int*)malloc(WIDTH * HEIGHT * sizeof(int));
-    cudaMalloc(&d_data, WIDTH * HEIGHT * sizeof(int));
+    data = (int*)malloc(imageSize * 3);
+    cudaMalloc(&d_data, imageSize * 3);
 
     for (int x = 0; x < WIDTH; x++) 
         for (int y = 0; y < HEIGHT; y++) 
@@ -74,45 +117,34 @@ int main()
     SDL_Window *win = SDL_CreateWindow("MandelBrot Viewer", 100, 100, WIDTH, HEIGHT, 0);
     SDL_Renderer *ren = SDL_CreateRenderer(win, -1, SDL_RENDERER_ACCELERATED);
 
-    Draw(ren,data);
-    SDL_Delay(500);
-
     int iterations = 1000;
     double x = 0;
     double y = 0;
-    double zoom = 100;  //150
+    double zoom = 150;  //150
 
-    dim3 blockSize(WIDTH/16, HEIGHT/16);
+    dim3 blockSize(WIDTH/64, HEIGHT/64);
 
     int bx = (WIDTH + blockSize.x - 1)/blockSize.x;
     int by = (HEIGHT + blockSize.y - 1)/blockSize.y;
 
     dim3 gridSize(bx, by);
 
-    int * check;
-    int * d_check;
-    check = (int*)malloc(sizeof(int));
-    *check = 0;
-    cudaMalloc(&d_check, sizeof(int));
-
-        std::cout << *check << std::endl; 
-
-    Calculate<<<gridSize,blockSize>>>(d_data, x, y, zoom, iterations, WIDTH, HEIGHT, d_check);
+    Calculate<<<gridSize,blockSize>>>(d_data, x, y, zoom, iterations, WIDTH, HEIGHT);
     cudaDeviceSynchronize();
-    cudaMemcpy(data, d_data, sizeof(int) * WIDTH * HEIGHT, cudaMemcpyDeviceToHost);
-    cudaMemcpy(check, d_check, sizeof(int), cudaMemcpyDeviceToHost);
+    cudaMemcpy(data, d_data, imageSize * 3, cudaMemcpyDeviceToHost);
     Draw(ren, data);
 
-    std::cout << *check << std::endl; 
 
 
-    while (true) {
+    while (true) 
+    {
         SDL_Event event;
         SDL_PollEvent(&event);
         if (event.type == SDL_QUIT)
             break;
         else if (event.type == SDL_KEYDOWN) 
         {
+            std::chrono::system_clock::time_point timeStart = std::chrono::system_clock::now();
             switch(event.key.keysym.sym)
             {
                 case SDLK_UP:                y -= 1/zoom*5; break;
@@ -125,17 +157,17 @@ int main()
                 case SDLK_KP_MINUS: iterations /= 5;        std::cout << iterations << std::endl; break;
                 default:                                    break;
             }
-            Calculate<<<gridSize,blockSize>>>(d_data, x, y, zoom, iterations, WIDTH, HEIGHT, d_check);
-            cudaMemcpy(data, d_data, sizeof(int) * WIDTH * HEIGHT, cudaMemcpyDeviceToHost);
-            cudaMemcpy(check, d_check, sizeof(int), cudaMemcpyDeviceToHost);
+            Calculate<<<gridSize,blockSize>>>(d_data, x, y, zoom, iterations, WIDTH, HEIGHT);
+            cudaMemcpy(data, d_data, imageSize * 3, cudaMemcpyDeviceToHost);
             cudaDeviceSynchronize();
             Draw(ren, data);
-            std::cout << *check << std::endl; 
+            std::chrono::system_clock::time_point timeEnd = std::chrono::system_clock::now();
+            std::chrono::duration<double> duration = timeEnd - timeStart;
+            double fps = 1 / duration.count();
+            std::cout << "FPS: " << fps << std::endl;
+            //std::cout << zoom << std::endl; 
         }
     } 
-
-    free(check);
-    cudaFree(d_check);
 
     free(data);
     cudaFree(d_data);

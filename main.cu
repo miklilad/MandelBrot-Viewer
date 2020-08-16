@@ -11,6 +11,7 @@ const double startX = -1.3733926023949114;
 const double startY = -0.08556614599092829;
 const double startZoom = 500000;
 
+using namespace std::chrono;
 
 struct HSV {
   float h;
@@ -24,12 +25,13 @@ struct RGB {
   int b;
 };
 
+__device__
 RGB Hsv2rgb(const HSV& color) {
   float s = color.s / 100;
   float v = color.v / 100;
   float c = v * s;
   float h = color.h / 60;
-  float x = c * (1 - abs(fmod(h, 2) - 1));
+  float x = c * (1 - abs(fmod(h, (float)2) - 1));
   float m = v - c;
   int hi = (int) floor(h) % 6;
   HSV converted;
@@ -54,17 +56,22 @@ RGB Hsv2rgb(const HSV& color) {
   return {r, g, b};
 }
 
-void Draw(SDL_Renderer * ren, int * data) {
-  SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
+void Draw(SDL_Renderer * ren, SDL_Texture * texture, int * data) {
+  // SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
+  // SDL_RenderClear(ren);
+  // for(int x = 0; x < WIDTH; x++) {
+  //   for(int y = 0; y < HEIGHT; y++) {
+  //     int i = y * WIDTH + x;
+  //     RGB c = Hsv2rgb({(float)data[i], 100, (float)((data[i] % 200) >= 100 ? 100 - (data[i] % 100) : data[i]%100)});
+  //     SDL_SetRenderDrawColor(ren, c.r, c.g, c.b, 255);
+  //     SDL_RenderDrawPoint(ren, x, y);
+  //   }
+  // }
+  // SDL_RenderPresent(ren);
+
+  SDL_UpdateTexture(texture , NULL, data, WIDTH * sizeof (int));
   SDL_RenderClear(ren);
-  for(int x = 0; x < WIDTH; x++) {
-    for(int y = 0; y < HEIGHT; y++) {
-      int i = y * WIDTH + x;
-      RGB c = Hsv2rgb({(float)data[i], 100, (float)((data[i] % 200) >= 100 ? 100 - (data[i] % 100) : data[i]%100)});
-      SDL_SetRenderDrawColor(ren, c.r, c.g, c.b, 255);
-      SDL_RenderDrawPoint(ren, x, y);
-    }
-  }
+  SDL_RenderCopy(ren, texture, NULL, NULL);
   SDL_RenderPresent(ren);
 }
 
@@ -78,9 +85,6 @@ void Calculate(int * data, double xC, double yC, double zoom, int iterations, in
   if(x >= width || y >= height)
     return;
 
-  data[k + width * height] = blockIdx.x;
-  data[k + width * height * 2] = blockIdx.y;
-
   double cR = xC + (x - width / 2) / zoom;
   double cI = yC + (y - height / 2) / zoom;
   double real = 0;
@@ -91,7 +95,10 @@ void Calculate(int * data, double xC, double yC, double zoom, int iterations, in
     real = R * R - imaginary * imaginary + cR;
     imaginary = 2 * R * imaginary + cI;
     if(abs(real) > 2 || abs(imaginary) > 2) {
-      data[k] = i;
+      RGB c = Hsv2rgb({(float)i, 100, (float)((i % 200) >= 100 ? 100 - (i % 100) : i%100)});
+      data[k] = c.r << 16;
+      data[k] += c.g << 8;
+      data[k] += c.b;
       break;
     }
   }
@@ -102,8 +109,8 @@ int main() {
   int imageSize = HEIGHT * WIDTH * sizeof(int);
   int * data;
   int * d_data;
-  data = (int *) malloc(imageSize * 3);
-  cudaMalloc(&d_data, imageSize * 3);
+  data = (int *) malloc(imageSize);
+  cudaMalloc(&d_data, imageSize);
 
   for(int x = 0; x < WIDTH; x++)
     for(int y = 0; y < HEIGHT; y++)
@@ -116,6 +123,7 @@ int main() {
 
   SDL_Window * win = SDL_CreateWindow("MandelBrot Viewer", 100, 100, WIDTH, HEIGHT, 0);
   SDL_Renderer * ren = SDL_CreateRenderer(win, -1, SDL_RENDERER_ACCELERATED);
+  SDL_Texture * texture = SDL_CreateTexture(ren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, WIDTH, HEIGHT);
 
   int iterations = 1000;
   double x = startX;
@@ -130,9 +138,8 @@ int main() {
   dim3 gridSize(bx, by);
 
   Calculate<<<gridSize, blockSize>>>(d_data, x, y, zoom, iterations, WIDTH, HEIGHT);
-  cudaDeviceSynchronize();
-  cudaMemcpy(data, d_data, imageSize * 3, cudaMemcpyDeviceToHost);
-  Draw(ren, data);
+  cudaMemcpy(data, d_data, imageSize, cudaMemcpyDeviceToHost);
+  Draw(ren, texture, data);
 
   bool printDebug = false;
   bool printPosition = false;
@@ -143,7 +150,7 @@ int main() {
     if(event.type == SDL_QUIT)
       break;
     else if(event.type == SDL_KEYDOWN) {
-      std::chrono::system_clock::time_point timeStart = std::chrono::system_clock::now();
+      system_clock::time_point timeStart = system_clock::now();
       switch(event.key.keysym.sym) {
         case SDLK_UP: y -= 1 / zoom * 5;
           break;
@@ -169,16 +176,26 @@ int main() {
           break;
         default: break;
       }
+      system_clock::time_point calcStart = system_clock::now();
       Calculate<<<gridSize, blockSize>>>(d_data, x, y, zoom, iterations, WIDTH, HEIGHT);
-      cudaMemcpy(data, d_data, imageSize * 3, cudaMemcpyDeviceToHost);
-      cudaDeviceSynchronize();
-      Draw(ren, data);
-      std::chrono::system_clock::time_point timeEnd = std::chrono::system_clock::now();
-      std::chrono::duration<double> duration = timeEnd - timeStart;
+      duration<double> calcDuration = system_clock::now() - calcStart;
+
+      system_clock::time_point copyStart = system_clock::now();
+      cudaMemcpy(data, d_data, imageSize, cudaMemcpyDeviceToHost);
+      duration<double> copyDuration = system_clock::now() - copyStart;
+
+      system_clock::time_point drawStart = system_clock::now();
+      Draw(ren, texture, data);
+      duration<double> drawDuration = system_clock::now() - drawStart;
+  
+      duration<double> duration = system_clock::now() - timeStart;
       double fps = 1 / duration.count();
       if(printDebug)
-        std::cout << std::defaultfloat
-        << "FPS: " << fps << std::endl;
+        std::cout << std::fixed
+        << "FPS: " << fps
+        << " calc: " << calcDuration.count()
+        << " copy: " << copyDuration.count()
+        << " draw: " << drawDuration.count() << std::endl;
       if(printPosition)
         std::cout << std::setprecision(20) << std::fixed
         << "x: " << x 

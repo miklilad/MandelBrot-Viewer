@@ -3,13 +3,19 @@
 #include <iomanip>
 #include "SDL2/SDL.h"
 #include "cuda.h"
-#include "cudaProfiler.h"
+#include "CAMPARY/Doubles/src_gpu/multi_prec.h"
 
-const int WIDTH = 640; //640
-const int HEIGHT = 480; //480
-const double startX = -1.3733926023949114;
-const double startY = -0.08556614599092829;
-const double startZoom = 500000;
+#define COORD multi_prec<2>
+
+const int WIDTH = 640 * 2; //640
+const int HEIGHT = 480 * 2; //480
+//const double startX = -1.3733926023949114;
+//const double startY = -0.08556614599092829;
+//const double startZoom = 500000;
+
+const COORD startX = -1.95379887674656838037;
+const COORD startY = -0.00000000160728156195;
+const COORD startZoom = 2.13951e+17;
 
 using namespace std::chrono;
 
@@ -77,7 +83,7 @@ void Draw(SDL_Renderer * ren, SDL_Texture * texture, int * data) {
 
 
 __global__
-void Calculate(int * data, double xC, double yC, double zoom, int iterations, int width, int height) {
+void Calculate(int * data, COORD xC,COORD yC, COORD zoom, int iterations, int width, int height) {
   int x = blockDim.x * blockIdx.x + threadIdx.x;
   int y = blockDim.y * blockIdx.y + threadIdx.y;
   int k = y * width + x;
@@ -85,13 +91,13 @@ void Calculate(int * data, double xC, double yC, double zoom, int iterations, in
   if(x >= width || y >= height)
     return;
 
-  double cR = xC + (x - width / 2) / zoom;
-  double cI = yC + (y - height / 2) / zoom;
-  double real = 0;
-  double imaginary = 0;
+  COORD cR = xC + (x - width / 2) / zoom;
+  COORD cI = yC + (y - height / 2) / zoom;
+  COORD real = (double)0;
+  COORD imaginary = (double)0;
   data[k] = 0;
   for(int i = 0; i < iterations; i++) {
-    double R = real;
+    COORD R = real;
     real = R * R - imaginary * imaginary + cR;
     imaginary = 2 * R * imaginary + cI;
     if(abs(real) > 2 || abs(imaginary) > 2) {
@@ -126,9 +132,9 @@ int main() {
   SDL_Texture * texture = SDL_CreateTexture(ren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, WIDTH, HEIGHT);
 
   int iterations = 1000;
-  double x = startX;
-  double y = startY;
-  double zoom = startZoom;  //150
+  COORD x = startX;
+  COORD y = startY;
+  COORD zoom = startZoom;  //150
 
   dim3 blockSize(WIDTH / 64, HEIGHT / 64);
 
@@ -196,12 +202,12 @@ int main() {
         << " calc: " << calcDuration.count()
         << " copy: " << copyDuration.count()
         << " draw: " << drawDuration.count() << std::endl;
-      if(printPosition)
-        std::cout << std::setprecision(20) << std::fixed
-        << "x: " << x 
-        << " y: " << y << std::setprecision(5) << std::scientific
-        << " zoom: " << zoom 
-        << std::endl;
+      //  if(printPosition)
+      //    std::cout << std::setprecision(20) << std::fixed
+      //    << "x: " << x 
+      //    << " y: " << y << std::setprecision(5) << std::scientific
+      //    << " zoom: " << zoom 
+      //    << std::endl;
 
       //std::cout << zoom << std::endl;
     }

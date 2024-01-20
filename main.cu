@@ -16,6 +16,7 @@ const int HEIGHT = 480 * 2; //480
 const COORD startX = -1.95379887674656838037;
 const COORD startY = -0.00000000160728156195;
 const COORD startZoom = 2.13951e+17;
+const int MOVE_AMOUNT = 5;
 
 using namespace std::chrono;
 
@@ -158,13 +159,13 @@ int main() {
     else if(event.type == SDL_KEYDOWN) {
       system_clock::time_point timeStart = system_clock::now();
       switch(event.key.keysym.sym) {
-        case SDLK_UP: y -= 1 / zoom * 5;
+        case SDLK_UP: y -= 1 / zoom * MOVE_AMOUNT;
           break;
-        case SDLK_DOWN: y += 1 / zoom * 5;
+        case SDLK_DOWN: y += 1 / zoom * MOVE_AMOUNT;
           break;
-        case SDLK_RIGHT: x += 1 / zoom * 5;
+        case SDLK_RIGHT: x += 1 / zoom * MOVE_AMOUNT;
           break;
-        case SDLK_LEFT: x -= 1 / zoom * 5;
+        case SDLK_LEFT: x -= 1 / zoom * MOVE_AMOUNT;
           break;
         case SDLK_PAGEUP: zoom *= 1.1;
           break;
